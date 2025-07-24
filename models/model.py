@@ -217,7 +217,7 @@ class PV_VLM(nn.Module):
         )
         self.text_projection = nn.Linear(self.vision_tower.config.text_config.hidden_size, configs.d_model)
         self.ts_projection = nn.Linear(configs.d_model, configs.d_model)
-
+        self.normalize = Normalize(configs.d_model, configs.norm_type, configs.norm_eps, configs.norm_affine)
         self.cma = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.cma_img_ts = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.patch_nums = int((self.input_size - self.patch_len) / self.stride + 2)
@@ -298,6 +298,7 @@ class PV_VLM(nn.Module):
         fused_llm_out = self.llm_out_projection(fused_llm_out)
         fused_ts, _ = self.cma(aligned_ts, fused_llm_out, fused_llm_out)  # [B, L_ts, d_llm]
         final_ts = aligned_ts + fused_ts
+        final_ts = self.normalize(final_ts)
         if self.wio_ts:
             final_ts = fused_llm_out[:,:self.patch_nums,:]
         if self.only_ts:
