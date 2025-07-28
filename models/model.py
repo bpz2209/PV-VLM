@@ -128,7 +128,7 @@ class PV_VLM(nn.Module):
         self.config.output_hidden_states = True
         self.config.output_attentions = True
         if configs.horizons > 20:
-            self.config.n_positions = 2048
+            self.config.n_positions = 3072
         
         try:
             self.llm_model = AutoModel.from_pretrained(
@@ -217,7 +217,7 @@ class PV_VLM(nn.Module):
         )
         self.text_projection = nn.Linear(self.vision_tower.config.text_config.hidden_size, configs.d_model)
         self.ts_projection = nn.Linear(configs.d_model, configs.d_model)
-        self.normalize = Normalize(configs.d_model, configs.norm_type, configs.norm_eps, configs.norm_affine)
+        self.normalize = Normalize('layernorm', 1)
         self.cma = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.cma_img_ts = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.patch_nums = int((self.input_size - self.patch_len) / self.stride + 2)
@@ -278,12 +278,11 @@ class PV_VLM(nn.Module):
         bs, ts_tokens, d_llm = img_feats_all.shape
         img_feats_all = img_feats_all.view(B, T, ts_tokens, d_llm)
         img_feats_all = img_feats_all.reshape(B, T * ts_tokens, d_llm)
+        pos_emb = Rotate_PositionEmbedding(d_llm, max_len=img_feats_all.size(1)).to(img_feats_all.device)
+        pos_emb = pos_emb.to(img_feats_all.dtype)
+        img_feats_all = img_feats_all + pos_emb  # 广播 [B, L, D] + [1, L, D]
         # 卷积降低维度
         img_feats_all = img_feats_all.permute(0, 2, 1).contiguous()
-        # positional embedding
-        pos_emb = Rotate_PositionEmbedding(d_llm, max_len=img_feats_all.shape[2])
-        pos_emb = pos_emb.to(img_feats_all.device)
-        img_feats_all = img_feats_all + pos_emb
         #　3x3 卷积
         img_feats_all = self.conv(img_feats_all)
         img_feats_all = img_feats_all.permute(0, 2, 1).contiguous()
@@ -298,7 +297,7 @@ class PV_VLM(nn.Module):
         fused_llm_out = self.llm_out_projection(fused_llm_out)
         fused_ts, _ = self.cma(aligned_ts, fused_llm_out, fused_llm_out)  # [B, L_ts, d_llm]
         final_ts = aligned_ts + fused_ts
-        final_ts = self.normalize(final_ts)
+        # final_ts = self.normalize(final_ts)
         if self.wio_ts:
             final_ts = fused_llm_out[:,:self.patch_nums,:]
         if self.only_ts:
