@@ -8,35 +8,6 @@ from models.StandNorm import Normalize
 ####################################
 # 通用归一化层
 ####################################
-class NormalizationLayer(nn.Module):
-    def __init__(self, norm_type: str, num_features: int, eps: float = 1e-5, affine: bool = True, num_groups: int = 32):
-        """
-        通用归一化层，可选择 'layernorm'、'batchnorm' 或 'groupnorm'
-        """
-        super(NormalizationLayer, self).__init__()
-        norm_type = norm_type.lower()
-        if norm_type == 'layernorm':
-            self.norm = nn.LayerNorm(num_features, eps=eps, elementwise_affine=affine)
-        elif norm_type == 'batchnorm':
-            self.norm = nn.BatchNorm1d(num_features, eps=eps, affine=affine)
-        elif norm_type == 'groupnorm':
-            self.norm = nn.GroupNorm(num_groups=num_groups, num_channels=num_features, eps=eps, affine=affine)
-        else:
-            raise ValueError(f"Unsupported norm_type: {norm_type}")
-        self.norm_type = norm_type
-
-    def forward(self, x: Tensor) -> Tensor:
-        # 对于 BatchNorm1d 和 GroupNorm，输入要求 [B, C, L]
-        if self.norm_type in ['batchnorm', 'groupnorm']:
-            if x.dim() == 3:
-                x = x.transpose(1, 2)
-                x = self.norm(x)
-                x = x.transpose(1, 2)
-                return x
-            else:
-                return self.norm(x)
-        else:
-            return self.norm(x)
 def Rotate_PositionEmbedding(d_model, max_len=5000):
     """
     生成旋转位置编码
@@ -217,7 +188,7 @@ class PV_VLM(nn.Module):
         )
         self.text_projection = nn.Linear(self.vision_tower.config.text_config.hidden_size, configs.d_model)
         self.ts_projection = nn.Linear(configs.d_model, configs.d_model)
-        self.normalize = Normalize('layernorm', 1)
+        self.normalize = Normalize(1)
         self.cma = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.cma_img_ts = CrossAttention(self.d_model, self.n_heads, configs.dropout)
         self.patch_nums = int((self.input_size - self.patch_len) / self.stride + 2)
@@ -229,6 +200,7 @@ class PV_VLM(nn.Module):
 
     def forecast(self, imgs, x):
         # 时序数据预处理
+        x = self.normalize(x, mode='norm')
         B, T, N = x.size()
         x_enc = x.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
         # 构造 prompt（基于统计信息）
@@ -297,7 +269,7 @@ class PV_VLM(nn.Module):
         fused_llm_out = self.llm_out_projection(fused_llm_out)
         fused_ts, _ = self.cma(aligned_ts, fused_llm_out, fused_llm_out)  # [B, L_ts, d_llm]
         final_ts = aligned_ts + fused_ts
-        # final_ts = self.normalize(final_ts)
+        final_ts = self.normalize(final_ts, 'denorm')
         if self.wio_ts:
             final_ts = fused_llm_out[:,:self.patch_nums,:]
         if self.only_ts:
